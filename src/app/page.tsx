@@ -7,29 +7,36 @@ import { Job } from '@/lib/types';
 export default function Home() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState('');
   const [location, setLocation] = useState('Lima, Peru');
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [dataStatus, setDataStatus] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<string>('');
+  const [needsRefresh, setNeedsRefresh] = useState(false);
 
   useEffect(() => {
     fetchJobs();
   }, []);
 
-  const fetchJobs = async (query = 'empleo', loc = 'Lima, Peru') => {
-    setLoading(true);
+  const fetchJobs = async (query = 'empleo', loc = 'Lima, Peru', refresh = false) => {
+    if (refresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setStatusMessage('');
     try {
       const searchQuery = `${query} jobs in ${loc}`;
-      // Usar el nuevo endpoint de scraping (sin depender de APIs de pago)
-      const response = await fetch(`/api/scrape?query=${encodeURIComponent(searchQuery)}`);
+      const refreshParam = refresh ? '&refresh=true' : '';
+      const response = await fetch(`/api/scrape?query=${encodeURIComponent(searchQuery)}${refreshParam}`);
       
       const data = await response.json();
       console.log('Jobs data:', data);
       
       setJobs(data.data || []);
       setDataStatus(data.status || 'unknown');
+      setNeedsRefresh(data.needsRefresh || false);
       if (data.message) {
         setStatusMessage(data.message);
       }
@@ -40,6 +47,7 @@ export default function Home() {
       setStatusMessage('Error al cargar las ofertas. Intenta de nuevo.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -49,7 +57,7 @@ export default function Home() {
   };
 
   const handleRefresh = () => {
-    fetchJobs(search || 'empleo', location);
+    fetchJobs(search || 'empleo', location, true);
   };
 
   return (
@@ -77,9 +85,18 @@ export default function Home() {
             </p>
           )}
           {statusMessage && (
-            <p className="text-sm text-green-600 mt-2 bg-green-50 px-4 py-2 rounded-lg inline-block">
-              ✓ {statusMessage}
+            <p className={`text-sm mt-2 px-4 py-2 rounded-lg inline-block ${needsRefresh ? 'text-orange-600 bg-orange-50' : 'text-green-600 bg-green-50'}`}>
+              {needsRefresh ? '⚠️' : '✓'} {statusMessage}
             </p>
+          )}
+          {needsRefresh && (
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="mt-3 px-6 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors shadow-md font-medium disabled:opacity-50"
+            >
+              {refreshing ? '⏳ Buscando empleos en Perú...' : '🔄 Actualizar Datos de Perú'}
+            </button>
           )}
         </div>
 
@@ -107,16 +124,18 @@ export default function Home() {
             </select>
             <button
               type="submit"
-              className="w-full md:w-auto px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-md font-medium"
+              disabled={loading}
+              className="w-full md:w-auto px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-md font-medium disabled:opacity-50"
             >
               🔍 Buscar
             </button>
             <button
               type="button"
               onClick={handleRefresh}
-              className="w-full md:w-auto px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors shadow-md font-medium"
+              disabled={refreshing}
+              className="w-full md:w-auto px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors shadow-md font-medium disabled:opacity-50"
             >
-              🔄 Actualizar
+              {refreshing ? '⏳ Actualizando...' : '🔄 Actualizar'}
             </button>
           </div>
         </form>

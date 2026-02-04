@@ -107,27 +107,33 @@ async function getLatestApifyJobs(): Promise<Job[]> {
 // Ejecutar nuevo scraping en Apify
 async function runApifyScraper(query: string, location: string): Promise<Job[]> {
   try {
+    if (!APIFY_TOKEN) {
+      console.log('No APIFY_TOKEN configured');
+      return [];
+    }
+    
     console.log(`Starting Apify scraper for: "${query}" in "${location}"`);
     
-    // Iniciar el actor con los parámetros de búsqueda
+    // URL de búsqueda con sortBy=DD para ordenar por más reciente
+    const searchUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(query)}&location=${encodeURIComponent(location)}&sortBy=DD&position=1&pageNum=0`;
+    
+    // Iniciar el actor con el formato correcto (urls como array)
     const runResponse = await fetch(
       `https://api.apify.com/v2/acts/${ACTOR_ID}/runs?token=${APIFY_TOKEN}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          searchUrl: `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(query)}&location=${encodeURIComponent(location)}&position=1&pageNum=0`,
-          maxResults: 25,
-          scrapeJobDetails: false,
-          proxy: {
-            useApifyProxy: true
-          }
+          urls: [searchUrl],
+          maxResults: 50,
+          scrapeJobDetails: false
         })
       }
     );
 
     if (!runResponse.ok) {
-      console.error('Error starting Apify:', runResponse.status);
+      const errorText = await runResponse.text();
+      console.error('Error starting Apify:', runResponse.status, errorText);
       return [];
     }
 
@@ -135,10 +141,10 @@ async function runApifyScraper(query: string, location: string): Promise<Job[]> 
     const runId = runData.data.id;
     console.log('Apify run started:', runId);
 
-    // Esperar a que termine (máximo 90 segundos)
+    // Esperar a que termine (máximo 120 segundos)
     let status = 'RUNNING';
     let attempts = 0;
-    const maxAttempts = 45;
+    const maxAttempts = 60;
 
     while ((status === 'RUNNING' || status === 'READY') && attempts < maxAttempts) {
       await new Promise(resolve => setTimeout(resolve, 2000));
@@ -177,7 +183,7 @@ async function runApifyScraper(query: string, location: string): Promise<Job[]> 
 
 // Transformar items de Apify al formato de nuestra app
 function transformApifyItems(items: any[]): Job[] {
-  return items.map((item: any, index: number) => ({
+  const jobs = items.map((item: any, index: number) => ({
     job_id: item.id || `linkedin_${Date.now()}_${index}`,
     job_title: item.title || 'Sin título',
     employer_name: item.companyName || 'Empresa',
@@ -186,7 +192,7 @@ function transformApifyItems(items: any[]): Job[] {
     job_country: item.companyAddress?.addressCountry || '',
     job_description: item.descriptionText?.substring(0, 500) || 'Ver detalles en LinkedIn',
     job_apply_link: item.link || item.applyUrl || 'https://www.linkedin.com/jobs',
-    job_posted_at_datetime_utc: item.postedAt || new Date().toISOString(),
+    job_posted_at_datetime_utc: parsePostedDate(item.postedAt),
     job_min_salary: extractSalaryMin(item.salary),
     job_max_salary: extractSalaryMax(item.salary),
     job_salary_currency: 'USD',
@@ -195,6 +201,46 @@ function transformApifyItems(items: any[]): Job[] {
     seniorityLevel: item.seniorityLevel || '',
     applicantsCount: item.applicantsCount || ''
   }));
+  
+  // Ordenar por fecha más reciente primero
+  return jobs.sort((a, b) => {
+    const dateA = new Date(a.job_posted_at_datetime_utc).getTime();
+    const dateB = new Date(b.job_posted_at_datetime_utc).getTime();
+    return dateB - dateA; // Más reciente primero
+  });
+}
+
+// Parsear fecha de publicación (puede venir como "hace 2 horas", "ayer", etc.)
+function parsePostedDate(postedAt: string | null): string {
+  if (!postedAt) return new Date().toISOString();
+  
+  const now = new Date();
+  const lowerPosted = postedAt.toLowerCase();
+  
+  // Si ya es una fecha ISO, devolverla
+  if (postedAt.includes('T') || postedAt.match(/^\d{4}-\d{2}-\d{2}/)) {
+    return postedAt;
+  }
+  
+  // Parsear formatos relativos en español e inglés
+  if (lowerPosted.includes('hora') || lowerPosted.includes('hour')) {
+    const hours = parseInt(postedAt) || 1;
+    now.setHours(now.getHours() - hours);
+  } else if (lowerPosted.includes('minuto') || lowerPosted.includes('minute')) {
+    const minutes = parseInt(postedAt) || 30;
+    now.setMinutes(now.getMinutes() - minutes);
+  } else if (lowerPosted.includes('día') || lowerPosted.includes('day') || lowerPosted.includes('ayer') || lowerPosted.includes('yesterday')) {
+    const days = parseInt(postedAt) || 1;
+    now.setDate(now.getDate() - days);
+  } else if (lowerPosted.includes('semana') || lowerPosted.includes('week')) {
+    const weeks = parseInt(postedAt) || 1;
+    now.setDate(now.getDate() - (weeks * 7));
+  } else if (lowerPosted.includes('mes') || lowerPosted.includes('month')) {
+    const months = parseInt(postedAt) || 1;
+    now.setMonth(now.getMonth() - months);
+  }
+  
+  return now.toISOString();
 }
 
 function extractSalaryMin(salary: string | null): number | null {
@@ -269,19 +315,51 @@ export async function GET(request: NextRequest) {
     });
   }
 
+  // Filtrar por ubicación (Peru/Lima) si es necesario
+  const locationLower = location.toLowerCase();
+  const isPeruSearch = locationLower.includes('peru') || locationLower.includes('lima');
+  
+  let locationFilteredJobs = jobs;
+  if (isPeruSearch) {
+    locationFilteredJobs = jobs.filter(job => {
+      const jobLocation = `${job.job_city} ${job.job_country}`.toLowerCase();
+      return jobLocation.includes('peru') || 
+             jobLocation.includes('perú') || 
+             jobLocation.includes('lima') ||
+             jobLocation.includes('arequipa') ||
+             jobLocation.includes('trujillo') ||
+             jobLocation.includes('remote') ||
+             jobLocation.includes('remoto');
+    });
+  }
+  
+  // Si no hay empleos en Perú, mostrar todos pero indicarlo
+  if (locationFilteredJobs.length === 0 && isPeruSearch) {
+    console.log('No jobs found for Peru, showing all available jobs');
+    // Mostrar los trabajos disponibles pero indicar que no son de Perú
+    return NextResponse.json({
+      data: jobs.slice(0, 30),
+      status: 'live',
+      message: `⚠️ No se encontraron empleos en Perú. Mostrando ${jobs.length} ofertas internacionales. Usa el botón "Actualizar Datos" para buscar empleos específicos de Perú.`,
+      sources: ['LinkedIn'],
+      total: jobs.length,
+      needsRefresh: true
+    });
+  }
+
   // Filtrar por query si tenemos datos
-  const filteredJobs = jobs.filter(job => {
+  const filteredJobs = locationFilteredJobs.filter(job => {
     const searchTerms = query.toLowerCase().split(' ');
     const jobText = `${job.job_title} ${job.employer_name} ${job.job_description}`.toLowerCase();
     return searchTerms.some(term => jobText.includes(term));
   });
 
-  const finalJobs = filteredJobs.length > 0 ? filteredJobs : jobs;
+  const finalJobs = filteredJobs.length > 0 ? filteredJobs : locationFilteredJobs;
 
   return NextResponse.json({
     data: finalJobs.slice(0, 30),
     status: 'live',
-    message: `🔥 ${finalJobs.length} ofertas reales de LinkedIn`,
+    message: `🔥 ${finalJobs.length} ofertas de LinkedIn en ${location}`,
     sources: ['LinkedIn'],
     total: jobs.length
   });

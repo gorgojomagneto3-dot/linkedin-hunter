@@ -8,14 +8,25 @@ export default function JobCard({ job }: JobCardProps) {
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     const now = new Date();
-    const diffTime = Math.abs(now.getTime() - date.getTime());
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    const diffTime = now.getTime() - date.getTime();
+    const diffMinutes = Math.floor(diffTime / (1000 * 60));
+    const diffHours = Math.floor(diffTime / (1000 * 60 * 60));
+    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
     
+    if (diffMinutes < 60) return `Hace ${diffMinutes} min`;
+    if (diffHours < 24) return `Hace ${diffHours} horas`;
     if (diffDays === 0) return 'Hoy';
     if (diffDays === 1) return 'Ayer';
     if (diffDays < 7) return `Hace ${diffDays} días`;
     if (diffDays < 30) return `Hace ${Math.floor(diffDays / 7)} semanas`;
     return date.toLocaleDateString('es-PE');
+  };
+  
+  const isRecent = () => {
+    const date = new Date(job.job_posted_at_datetime_utc);
+    const now = new Date();
+    const diffHours = (now.getTime() - date.getTime()) / (1000 * 60 * 60);
+    return diffHours < 24;
   };
 
   const formatSalary = (min: number | null | undefined, max: number | null | undefined) => {
@@ -28,7 +39,16 @@ export default function JobCard({ job }: JobCardProps) {
   const salary = formatSalary(job.job_min_salary, job.job_max_salary);
 
   return (
-    <div className="bg-white rounded-xl shadow-md p-6 hover:shadow-xl transition-all duration-300 border border-gray-100 flex flex-col h-full">
+    <div className={`bg-white rounded-xl shadow-md p-6 hover:shadow-xl transition-all duration-300 border flex flex-col h-full ${isRecent() ? 'border-green-300 ring-2 ring-green-100' : 'border-gray-100'}`}>
+      {/* Badge de reciente */}
+      {isRecent() && (
+        <div className="mb-2">
+          <span className="px-2 py-1 bg-green-500 text-white text-xs rounded-full font-medium animate-pulse">
+            🆕 NUEVO
+          </span>
+        </div>
+      )}
+      
       {/* Header con logo y título */}
       <div className="flex items-start gap-3 mb-4">
         {job.employer_logo ? (
