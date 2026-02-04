@@ -26,28 +26,74 @@ const ACTOR_ID = 'hKByXkMQaC5Qt9UMN'; // LinkedIn Jobs Scraper
 // Obtener trabajos del último run de Apify
 async function getLatestApifyJobs(): Promise<Job[]> {
   try {
-    // Obtener el último run del actor
+    if (!APIFY_TOKEN) {
+      console.log('No APIFY_TOKEN configured');
+      return [];
+    }
+    
+    console.log('Fetching latest Apify jobs...');
+    
+    // Primero intentar obtener runs de MI cuenta (no del actor público)
+    const myRunsResponse = await fetch(
+      `https://api.apify.com/v2/actor-runs?token=${APIFY_TOKEN}&limit=5&desc=true`
+    );
+    
+    if (myRunsResponse.ok) {
+      const myRunsData = await myRunsResponse.json();
+      console.log(`Found ${myRunsData.data?.items?.length || 0} runs in my account`);
+      
+      // Buscar un run exitoso del actor de LinkedIn
+      for (const run of myRunsData.data?.items || []) {
+        if (run.status === 'SUCCEEDED' && run.actId === ACTOR_ID) {
+          console.log(`Found successful run: ${run.id}`);
+          const datasetId = run.defaultDatasetId;
+          const itemsResponse = await fetch(
+            `https://api.apify.com/v2/datasets/${datasetId}/items?token=${APIFY_TOKEN}&limit=100`
+          );
+          
+          if (itemsResponse.ok) {
+            const items = await itemsResponse.json();
+            console.log(`Got ${items.length} items from dataset ${datasetId}`);
+            if (items.length > 0) {
+              return transformApifyItems(items);
+            }
+          }
+        }
+      }
+    }
+    
+    // Fallback: obtener del actor directamente
     const runsResponse = await fetch(
       `https://api.apify.com/v2/acts/${ACTOR_ID}/runs?token=${APIFY_TOKEN}&limit=1&desc=true`
     );
     
-    if (!runsResponse.ok) return [];
+    if (!runsResponse.ok) {
+      console.log('Could not fetch actor runs:', runsResponse.status);
+      return [];
+    }
     
     const runsData = await runsResponse.json();
-    if (!runsData.data?.items?.length) return [];
+    if (!runsData.data?.items?.length) {
+      console.log('No runs found for actor');
+      return [];
+    }
     
     const lastRun = runsData.data.items[0];
+    console.log(`Last run status: ${lastRun.status}`);
     
-    // Si el último run fue exitoso, obtener sus datos
     if (lastRun.status === 'SUCCEEDED') {
       const datasetId = lastRun.defaultDatasetId;
       const itemsResponse = await fetch(
-        `https://api.apify.com/v2/datasets/${datasetId}/items?token=${APIFY_TOKEN}&limit=50`
+        `https://api.apify.com/v2/datasets/${datasetId}/items?token=${APIFY_TOKEN}&limit=100`
       );
       
-      if (!itemsResponse.ok) return [];
+      if (!itemsResponse.ok) {
+        console.log('Could not fetch dataset items:', itemsResponse.status);
+        return [];
+      }
       
       const items = await itemsResponse.json();
+      console.log(`Got ${items.length} items from actor dataset`);
       return transformApifyItems(items);
     }
     
