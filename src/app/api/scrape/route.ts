@@ -240,24 +240,3 @@ export async function GET(request: NextRequest) {
     total: jobs.length
   });
 }
-
-export async function GET(request: NextRequest) {
-  const searchParams = request.nextUrl.searchParams;
-  const fullQuery = searchParams.get('query') || 'empleo Lima Peru';
-  
-  // Extraer query y location del parámetro
-  const queryParts = fullQuery.replace(' jobs in ', '|').split('|');
-  const query = queryParts[0] || 'empleo';
-  const location = queryParts[1] || 'Lima, Peru';
-
-  console.log(`Generating LinkedIn search for: "${query}" in "${location}"`);
-
-  const jobs = generateLinkedInSearch(query, location);
-
-  return NextResponse.json({
-    data: jobs,
-    status: 'live',
-    message: `🔥 Búsqueda en LinkedIn en tiempo real para "${query}"`,
-    sources: ['LinkedIn']
-  });
-}
